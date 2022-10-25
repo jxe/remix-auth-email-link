@@ -42,7 +42,8 @@ export type MagicLinkPayload = {
   /**
    * If it should be validated or not.
    */
-  validateSessionMagicLink: boolean
+  validateSessionMagicLink: boolean,
+  targetUrl?: string
 }
 
 /**
@@ -249,14 +250,18 @@ export class EmailLinkStrategy<User> extends Strategy<
     }
 
     let user: User
+    let targetUrl: string | undefined
 
     try {
       // If we get here, the user clicked on the magic link inside email
       const magicLink = session.get(this.sessionMagicLinkKey) ?? ''
-      const { emailAddress: email, form } = await this.validateMagicLink(
+      const results = await this.validateMagicLink(
         request.url,
         await this.decrypt(magicLink)
       )
+      const { emailAddress: email, form } = results
+      targetUrl = results.targetUrl ?? options.successRedirect
+
       // now that we have the user email we can call verify to get the user
       user = await this.verify({ email, form, magicLinkVerify: true })
     } catch (error) {
@@ -274,7 +279,7 @@ export class EmailLinkStrategy<User> extends Strategy<
       })
     }
 
-    if (!options.successRedirect) {
+    if (!targetUrl) {
       return user
     }
 
@@ -284,7 +289,7 @@ export class EmailLinkStrategy<User> extends Strategy<
 
     session.set(options.sessionKey, user)
     const cookie = await sessionStorage.commitSession(session)
-    throw redirect(options.successRedirect, {
+    throw redirect(targetUrl, {
       headers: { 'Set-Cookie': cookie },
     })
   }
@@ -292,9 +297,10 @@ export class EmailLinkStrategy<User> extends Strategy<
   public async getMagicLink(
     emailAddress: string,
     domainUrl: string,
-    form: FormData
+    form: FormData,
+    targetUrl?: string
   ): Promise<string> {
-    const payload = this.createMagicLinkPayload(emailAddress, form)
+    const payload = this.createMagicLinkPayload(emailAddress, form, targetUrl)
     const stringToEncrypt = JSON.stringify(payload)
     const encryptedString = await this.encrypt(stringToEncrypt)
     const url = new URL(domainUrl)
@@ -340,7 +346,8 @@ export class EmailLinkStrategy<User> extends Strategy<
 
   private createMagicLinkPayload(
     emailAddress: string,
-    form: FormData
+    form: FormData,
+    targetUrl?: string
   ): MagicLinkPayload {
     return {
       emailAddress,
@@ -352,6 +359,7 @@ export class EmailLinkStrategy<User> extends Strategy<
       ),
       creationDate: new Date().toISOString(),
       validateSessionMagicLink: this.validateSessionMagicLink,
+      targetUrl,
     }
   }
 
@@ -385,6 +393,7 @@ export class EmailLinkStrategy<User> extends Strategy<
     let emailAddress
     let linkCreationDateString
     let validateSessionMagicLink
+    let targetUrl
     let form: Record<string, unknown>
     try {
       const decryptedString = await this.decrypt(linkCode)
@@ -393,6 +402,7 @@ export class EmailLinkStrategy<User> extends Strategy<
       form = payload.form
       linkCreationDateString = payload.creationDate
       validateSessionMagicLink = payload.validateSessionMagicLink
+      targetUrl = payload.targetUrl
     } catch (error: unknown) {
       console.error(error)
       throw new Error('Sign in link invalid. Please request a new one.')
@@ -425,13 +435,13 @@ export class EmailLinkStrategy<User> extends Strategy<
     const formData = new FormData()
     Object.keys(form).forEach((key) => {
       if (Array.isArray(form[key])) {
-        ;(form[key] as unknown[]).forEach((value) => {
+        ; (form[key] as unknown[]).forEach((value) => {
           formData.append(key, value as string | Blob)
         })
       } else {
         formData.append(key, form[key] as string | Blob)
       }
     })
-    return { emailAddress, form: formData }
+    return { emailAddress, form: formData, targetUrl }
   }
 }
